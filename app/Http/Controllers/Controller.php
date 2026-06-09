@@ -136,7 +136,9 @@ class Controller extends BaseController
     public function getUser()
     {
         try {
-            $data = DB::table('mst_user')->get();
+            $data = DB::table('mst_users')
+                ->select('id', 'name', 'email', 'google_id', 'google_avatar', 'email_verified_at', 'last_login_at', 'auth_provider', 'created_at', 'updated_at')
+                ->get();
             return response()->json([
                 'status' => 'success',
                 'count'  => count($data),
@@ -150,6 +152,257 @@ class Controller extends BaseController
             ], 500);
         }
     }
+    public function register(Request $request)
+    {
+        $name = trim((string) $request->input('name', ''));
+        $email = strtolower(trim((string) $request->input('email', '')));
+        $password = (string) $request->input('password', '');
+
+        if ($name === '') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'name wajib diisi.'
+            ], 422);
+        }
+
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'email tidak valid.'
+            ], 422);
+        }
+
+        if (strlen($password) < 6) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'password minimal 6 karakter.'
+            ], 422);
+        }
+
+        try {
+            $emailExists = DB::table('mst_users')
+                ->whereRaw('LOWER(email) = ?', [$email])
+                ->exists();
+
+            if ($emailExists) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Email sudah terdaftar.'
+                ], 409);
+            }
+
+            $now = date('Y-m-d H:i:s');
+            $token = $this->generateApiToken();
+            $userId = DB::table('mst_users')->insertGetId([
+                'name' => $name,
+                'email' => $email,
+                'password' => password_hash($password, PASSWORD_BCRYPT),
+                'api_token' => $token,
+                'auth_provider' => 'local',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+            $user = DB::table('mst_users')->where('id', $userId)->first();
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Register berhasil.',
+                'token' => $token,
+                'results' => $this->formatUser($user),
+            ], 201);
+        } catch (\Throwable $e) {
+            if (strpos($e->getMessage(), 'mst_users_email_unique') !== false) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Email sudah terdaftar.'
+                ], 409);
+            }
+
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Gagal register.',
+                'error_detail' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function login(Request $request)
+    {
+        $email = strtolower(trim((string) $request->input('email', '')));
+        $password = (string) $request->input('password', '');
+
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL) || $password === '') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'email dan password wajib diisi.'
+            ], 422);
+        }
+
+        try {
+            $user = DB::table('mst_users')
+                ->whereRaw('LOWER(email) = ?', [$email])
+                ->first();
+
+            if (!$user || $user->password === null || $user->password === '') {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Email atau password salah.'
+                ], 401);
+            }
+
+            $passwordInfo = password_get_info((string) $user->password);
+            $isHashedPassword = $passwordInfo['algo'] !== 0;
+            $passwordValid = $isHashedPassword
+                ? password_verify($password, (string) $user->password)
+                : hash_equals((string) $user->password, $password);
+
+            if (!$passwordValid) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Email atau password salah.'
+                ], 401);
+            }
+
+            $now = date('Y-m-d H:i:s');
+            $token = $this->generateApiToken();
+            $updateData = [
+                'api_token' => $token,
+                'last_login_at' => $now,
+                'updated_at' => $now,
+            ];
+
+            if (!$isHashedPassword) {
+                $updateData['password'] = password_hash($password, PASSWORD_BCRYPT);
+            }
+
+            DB::table('mst_users')->where('id', $user->id)->update($updateData);
+
+            $user = DB::table('mst_users')->where('id', $user->id)->first();
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Login berhasil.',
+                'token' => $token,
+                'results' => $this->formatUser($user),
+            ], 200);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Gagal login.',
+                'error_detail' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function markNotifikasiRead(Request $request)
+    {
+        $userId = $request->input('user_id');
+        $notifikasiId = $request->input('notifikasi_id', $request->input('notification_id'));
+
+        if (!filter_var($userId, FILTER_VALIDATE_INT) || (int) $userId < 1) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'user_id wajib diisi dan harus berupa angka lebih dari 0.'
+            ], 422);
+        }
+
+        if (!filter_var($notifikasiId, FILTER_VALIDATE_INT) || (int) $notifikasiId < 1) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'notifikasi_id wajib diisi dan harus berupa angka lebih dari 0.'
+            ], 422);
+        }
+
+        $userId = (int) $userId;
+        $notifikasiId = (int) $notifikasiId;
+
+        try {
+            if (!DB::table('mst_users')->where('id', $userId)->exists()) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Data user tidak ditemukan.'
+                ], 404);
+            }
+
+            if (!DB::table('mst_notifikasi')->where('id', $notifikasiId)->exists()) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Data notifikasi tidak ditemukan.'
+                ], 404);
+            }
+
+            $now = date('Y-m-d H:i:s');
+            $rows = DB::select(
+                "INSERT INTO mst_notifikasi_read (user_id, notifikasi_id, read_at, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT (user_id, notifikasi_id) DO UPDATE
+                 SET read_at = EXCLUDED.read_at,
+                     updated_at = EXCLUDED.updated_at
+                 RETURNING id, user_id, notifikasi_id, read_at, created_at, updated_at",
+                [$userId, $notifikasiId, $now, $now, $now]
+            );
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Notifikasi berhasil ditandai sudah dibaca.',
+                'results' => $rows[0],
+            ], 200);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Gagal menyimpan status read notifikasi.',
+                'error_detail' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function getNotifikasiByUser($user_id)
+    {
+        if (!filter_var($user_id, FILTER_VALIDATE_INT) || (int) $user_id < 1) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'user_id harus berupa angka lebih dari 0.'
+            ], 422);
+        }
+
+        $userId = (int) $user_id;
+
+        try {
+            if (!DB::table('mst_users')->where('id', $userId)->exists()) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Data user tidak ditemukan.'
+                ], 404);
+            }
+
+            $data = DB::select(
+                "SELECT
+                    n.*,
+                    CASE WHEN r.id IS NULL THEN false ELSE true END AS is_read,
+                    r.read_at
+                 FROM mst_notifikasi n
+                 LEFT JOIN mst_notifikasi_read r
+                   ON r.notifikasi_id = n.id
+                  AND r.user_id = ?
+                 ORDER BY n.id DESC",
+                [$userId]
+            );
+
+            return response()->json([
+                'status' => 'success',
+                'count' => count($data),
+                'results' => $data,
+            ], 200);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Gagal mengambil data notifikasi user.',
+                'error_detail' => $e->getMessage()
+            ], 500);
+        }
+    }
+
     public function getVersion()
     {
         try {
@@ -229,6 +482,19 @@ class Controller extends BaseController
     public function trxShare(Request $request)
     {
         return $this->incrementNovelCounter($request, 'share');
+    }
+
+    private function formatUser($user): array
+    {
+        $data = (array) $user;
+        unset($data['password']);
+
+        return $data;
+    }
+
+    private function generateApiToken(): string
+    {
+        return bin2hex(random_bytes(40));
     }
 
     private function incrementNovelCounter(Request $request, string $type)
