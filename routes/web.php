@@ -11,5 +11,7 @@ $router->get('/getNotifikasi', 'Controller@getNotifikasi');
 $router->get('/getUser', 'Controller@getUser');
 $router->get('/getVersion', 'Controller@getVersion');
 $router->get('/getSliders', 'Controller@getSliders');
-$router->get('/getTest', 'Controller@getTest');
+$router->post('/trxRead', 'Controller@trxRead');
+$router->post('/trxVote', 'Controller@trxVote');
+$router->post('/trxShare', 'Controller@trxShare');
 $router->post('/insertCeritaPanjang', 'Controller@insertCeritaPanjang');

@@ -1,5 +1,6 @@
 <?php
 namespace App\Http\Controllers;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Laravel\Lumen\Routing\Controller as BaseController;
 class Controller extends BaseController
@@ -215,8 +216,136 @@ class Controller extends BaseController
             'message' => $e->getMessage()
         ], 500);
     }}
-    public function getTest()
+    public function trxRead(Request $request)
     {
-       dd(1);
+        return $this->incrementNovelCounter($request, 'read');
+    }
+
+    public function trxVote(Request $request)
+    {
+        return $this->incrementNovelCounter($request, 'vote');
+    }
+
+    public function trxShare(Request $request)
+    {
+        return $this->incrementNovelCounter($request, 'share');
+    }
+
+    private function incrementNovelCounter(Request $request, string $type)
+    {
+        $configs = [
+            'read' => [
+                'table' => 'trx_read_novel',
+                'total_column' => 'total_read',
+            ],
+            'vote' => [
+                'table' => 'trx_vote_novel',
+                'total_column' => 'total_vote',
+            ],
+            'share' => [
+                'table' => 'trx_share_novel',
+                'total_column' => 'total_share',
+            ],
+        ];
+
+        if (!isset($configs[$type])) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Tipe transaksi tidak valid.'
+            ], 400);
+        }
+
+        $novelId = $request->input('novel_id', $request->input('id'));
+        $increment = $request->input('increment', 1);
+
+        if (!filter_var($novelId, FILTER_VALIDATE_INT) || (int)$novelId < 1) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'novel_id wajib diisi dan harus berupa angka lebih dari 0.'
+            ], 422);
+        }
+
+        if (!filter_var($increment, FILTER_VALIDATE_INT) || (int)$increment < 1) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'increment harus berupa angka lebih dari 0.'
+            ], 422);
+        }
+
+        $novelId = (int) $novelId;
+        $increment = (int) $increment;
+        $table = $configs[$type]['table'];
+        $totalColumn = $configs[$type]['total_column'];
+        $now = date('Y-m-d H:i:s');
+
+        try {
+            $result = DB::transaction(function () use ($novelId, $increment, $table, $totalColumn, $now) {
+                $totalRows = DB::select(
+                    "UPDATE mst_cerita
+                     SET {$totalColumn} = (
+                         CASE
+                             WHEN {$totalColumn}::text ~ '^[0-9]+$' THEN {$totalColumn}::integer
+                             ELSE 0
+                         END
+                     ) + ?, updated_at = ?
+                     WHERE id = ?
+                     RETURNING {$totalColumn} AS total_count",
+                    [$increment, $now, $novelId]
+                );
+
+                if (count($totalRows) === 0) {
+                    return [
+                        'not_found' => true,
+                    ];
+                }
+
+                $trxRows = DB::select(
+                    "INSERT INTO {$table} (novel_id, \"count\", created_at, updated_at)
+                     VALUES (?, ?, ?, ?)
+                     ON CONFLICT (novel_id) DO UPDATE
+                     SET \"count\" = (
+                         (
+                             CASE
+                                 WHEN {$table}.\"count\"::text ~ '^[0-9]+$' THEN {$table}.\"count\"::integer
+                                 ELSE 0
+                             END
+                         ) + EXCLUDED.\"count\"::integer
+                     )::varchar,
+                     updated_at = EXCLUDED.updated_at
+                     RETURNING id, novel_id, \"count\", created_at, updated_at",
+                    [$novelId, (string) $increment, $now, $now]
+                );
+
+                return [
+                    'not_found' => false,
+                    'trx' => $trxRows[0],
+                    'total_count' => (int) $totalRows[0]->total_count,
+                ];
+            });
+
+            if ($result['not_found']) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Data cerita tidak ditemukan.'
+                ], 404);
+            }
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Counter berhasil ditambahkan.',
+                'type' => $type,
+                'novel_id' => $novelId,
+                'count' => (int) $result['trx']->count,
+                'total_count' => $result['total_count'],
+                'results' => $result['trx'],
+            ], 200);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Gagal menambahkan counter.',
+                'error_detail' => $e->getMessage()
+            ], 500);
+        }
+
     }
 }
