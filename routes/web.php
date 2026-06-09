@@ -11,4 +11,5 @@ $router->get('/getNotifikasi', 'Controller@getNotifikasi');
 $router->get('/getUser', 'Controller@getUser');
 $router->get('/getVersion', 'Controller@getVersion');
 $router->get('/getSliders', 'Controller@getSliders');
+$router->get('/getTest', 'Controller@getTest');
 $router->post('/insertCeritaPanjang', 'Controller@insertCeritaPanjang');

@@ -215,4 +215,8 @@ class Controller extends BaseController
             'message' => $e->getMessage()
         ], 500);
     }}
+    public function getTest()
+    {
+       dd(1);
+    }
 }
