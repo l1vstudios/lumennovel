@@ -247,7 +247,7 @@ class Controller extends BaseController
             if (!$user || $user->password === null || $user->password === '') {
                 return response()->json([
                     'status' => 'error',
-                    'message' => 'Email atau password salah.'
+                    'message' => 'Pengguna tidak ditemukan.'
                 ], 401);
             }
 
@@ -260,7 +260,7 @@ class Controller extends BaseController
             if (!$passwordValid) {
                 return response()->json([
                     'status' => 'error',
-                    'message' => 'Email atau password salah.'
+                    'message' => 'Pengguna tidak ditemukan.'
                 ], 401);
             }
 
