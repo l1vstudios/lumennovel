@@ -11,6 +11,7 @@ $app->withFacades();
 $app->withEloquent();
 $app->middleware([
     App\Http\Middleware\CorsMiddleware::class,
+    App\Http\Middleware\ApiTokenMiddleware::class,
 ]);
 $app->singleton(
     Illuminate\Contracts\Debug\ExceptionHandler::class,
