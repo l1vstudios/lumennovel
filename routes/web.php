@@ -19,3 +19,5 @@ $router->post('/trxRead', 'Controller@trxRead');
 $router->post('/trxVote', 'Controller@trxVote');
 $router->post('/trxShare', 'Controller@trxShare');
 $router->post('/insertCeritaPanjang', 'Controller@insertCeritaPanjang');
+$router->post('/google-login', 'Controller@googleLogin');
+

@@ -5,6 +5,14 @@ use Illuminate\Support\Facades\DB;
 use Laravel\Lumen\Routing\Controller as BaseController;
 class Controller extends BaseController
 {
+    // OAuth 2.0 "Web client" ID dari Firebase/GCP. WAJIB sama dengan webClientId
+    // di aplikasi (data/googleAuth.ts). id_token Google hanya diterima jika
+    // klaim "aud" cocok dengan salah satu ID di bawah ini.
+    // Tambahkan iOS client ID juga bila aplikasi iOS memakai iosClientId.
+    private const GOOGLE_ALLOWED_CLIENT_IDS = [
+        '438568225178-pql53tjm7iul6ar54rf3fvct79p1sasf.apps.googleusercontent.com',
+    ];
+
     public function getKategori()
     {
         try {
@@ -293,6 +301,152 @@ class Controller extends BaseController
                 'error_detail' => $e->getMessage()
             ], 500);
         }
+    }
+
+    public function googleLogin(Request $request)
+    {
+        $idToken = (string) $request->input('id_token', '');
+
+        if ($idToken === '') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'id_token wajib diisi.'
+            ], 422);
+        }
+
+        $payload = $this->verifyGoogleIdToken($idToken);
+        if ($payload === null) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Token Google tidak valid atau kedaluwarsa.'
+            ], 401);
+        }
+
+        $googleId = (string) ($payload['sub'] ?? '');
+        $email = strtolower(trim((string) ($payload['email'] ?? '')));
+        $name = trim((string) ($payload['name'] ?? ''));
+        $avatar = (string) ($payload['picture'] ?? '');
+        $emailVerified = ($payload['email_verified'] ?? 'false') === true
+            || ($payload['email_verified'] ?? 'false') === 'true';
+
+        if ($googleId === '' || $email === '') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Data akun Google tidak lengkap.'
+            ], 422);
+        }
+
+        try {
+            $now = date('Y-m-d H:i:s');
+            $token = $this->generateApiToken();
+
+            // 1. Cari berdasarkan google_id, lalu fallback ke email.
+            $user = DB::table('mst_users')->where('google_id', $googleId)->first();
+            if (!$user) {
+                $user = DB::table('mst_users')
+                    ->whereRaw('LOWER(email) = ?', [$email])
+                    ->first();
+            }
+
+            if ($user) {
+                // 2. User sudah ada -> tautkan google_id & perbarui sesi.
+                $updateData = [
+                    'google_id' => $googleId,
+                    'api_token' => $token,
+                    'last_login_at' => $now,
+                    'updated_at' => $now,
+                ];
+                if ($avatar !== '') {
+                    $updateData['google_avatar'] = $avatar;
+                }
+                if (($user->name ?? '') === '' && $name !== '') {
+                    $updateData['name'] = $name;
+                }
+                if ($emailVerified && empty($user->email_verified_at)) {
+                    $updateData['email_verified_at'] = $now;
+                }
+
+                DB::table('mst_users')->where('id', $user->id)->update($updateData);
+                $user = DB::table('mst_users')->where('id', $user->id)->first();
+                $statusCode = 200;
+            } else {
+                // 3. User baru -> buat akun via Google (tanpa password).
+                $userId = DB::table('mst_users')->insertGetId([
+                    'name' => $name !== '' ? $name : strstr($email, '@', true),
+                    'email' => $email,
+                    'password' => null,
+                    'google_id' => $googleId,
+                    'google_avatar' => $avatar !== '' ? $avatar : null,
+                    'auth_provider' => 'google',
+                    'email_verified_at' => $emailVerified ? $now : null,
+                    'api_token' => $token,
+                    'last_login_at' => $now,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+                $user = DB::table('mst_users')->where('id', $userId)->first();
+                $statusCode = 201;
+            }
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Login Google berhasil.',
+                'token' => $token,
+                'results' => $this->formatUser($user),
+            ], $statusCode);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Gagal login Google.',
+                'error_detail' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    // Verifikasi id_token Google lewat endpoint tokeninfo (memvalidasi tanda
+    // tangan & masa berlaku di sisi Google). Mengembalikan payload klaim jika
+    // valid & "aud" cocok dengan client ID kita, atau null jika tidak valid.
+    private function verifyGoogleIdToken(string $idToken): ?array
+    {
+        $url = 'https://oauth2.googleapis.com/tokeninfo?id_token=' . urlencode($idToken);
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 10,
+            CURLOPT_SSL_VERIFYPEER => true,
+        ]);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($response === false || $httpCode !== 200) {
+            return null;
+        }
+
+        $payload = json_decode($response, true);
+        if (!is_array($payload)) {
+            return null;
+        }
+
+        // Pastikan token diterbitkan oleh Google.
+        $iss = $payload['iss'] ?? '';
+        if ($iss !== 'https://accounts.google.com' && $iss !== 'accounts.google.com') {
+            return null;
+        }
+
+        // Pastikan token ditujukan untuk aplikasi kita (cegah token disusupkan).
+        $aud = $payload['aud'] ?? '';
+        if (!in_array($aud, self::GOOGLE_ALLOWED_CLIENT_IDS, true)) {
+            return null;
+        }
+
+        // Pastikan belum kedaluwarsa.
+        if (!isset($payload['exp']) || (int) $payload['exp'] < time()) {
+            return null;
+        }
+
+        return $payload;
     }
 
     public function markNotifikasiRead(Request $request)
