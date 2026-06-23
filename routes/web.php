@@ -20,4 +20,4 @@ $router->post('/trxVote', 'Controller@trxVote');
 $router->post('/trxShare', 'Controller@trxShare');
 $router->post('/insertCeritaPanjang', 'Controller@insertCeritaPanjang');
 $router->post('/google-login', 'Controller@googleLogin');
-
+$router->post('/verifyPurchase', 'Controller@verifyPurchase');

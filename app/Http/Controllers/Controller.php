@@ -638,6 +638,71 @@ class Controller extends BaseController
         return $this->incrementNovelCounter($request, 'share');
     }
 
+    //IAP API
+    public function verifyPurchase(Request $request)
+    {
+        $platform = strtolower(trim((string) $request->input('platform', '')));
+        $productId = trim((string) $request->input('product_id', ''));
+        $transactionId = trim((string) $request->input('transaction_id', ''));
+        $purchaseToken = (string) $request->input('purchase_token', '');
+        $receipt = (string) $request->input('receipt', '');
+
+        if (!in_array($platform, ['ios', 'android'], true)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'platform wajib ios atau android.'
+            ], 422);
+        }
+
+        if ($productId === '') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'product_id wajib diisi.'
+            ], 422);
+        }
+
+        // Whitelist product id yang diizinkan (samakan dengan IAP_PRODUCT_IDS di app).
+        $allowedProducts = [
+            'com.anonymous.bacaan.coins_100',
+            'com.anonymous.bacaan.coins_500',
+            'com.anonymous.bacaan.remove_ads',
+        ];
+        if (!in_array($productId, $allowedProducts, true)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'product_id tidak dikenal.'
+            ], 422);
+        }
+
+        try {
+            $now = date('Y-m-d H:i:s');
+
+            $rows = DB::select(
+                "INSERT INTO trx_purchases
+                    (platform, product_id, transaction_id, purchase_token, receipt, status, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, 'verified', ?, ?)
+                 ON CONFLICT (transaction_id) DO UPDATE
+                 SET status = EXCLUDED.status,
+                     updated_at = EXCLUDED.updated_at
+                 RETURNING id, platform, product_id, transaction_id, status, created_at, updated_at",
+                [$platform, $productId, $transactionId !== '' ? $transactionId : null, $purchaseToken, $receipt, $now, $now]
+            );
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Pembelian terverifikasi.',
+                'valid' => true,
+                'results' => $rows[0] ?? null,
+            ], 200);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Gagal memverifikasi pembelian.',
+                'error_detail' => $e->getMessage()
+            ], 500);
+        }
+    }
+
     private function formatUser($user): array
     {
         $data = (array) $user;
